@@ -27,7 +27,10 @@ WHITE='\033[1;37m'
 GRAY='\033[0;90m'
 
 # ── Configuration ────────────────────────────────────────────────────
-REPO_URL="https://github.com/JuhLabs/juhradial-mx"
+# Override with JUHRADIAL_REPO_URL / JUHRADIAL_BRANCH to install a fork
+# or a feature branch instead of upstream master.
+REPO_URL="${JUHRADIAL_REPO_URL:-https://github.com/JuhLabs/juhradial-mx}"
+REPO_BRANCH="${JUHRADIAL_BRANCH:-master}"
 INSTALL_DIR="/opt/juhradial-mx"
 BIN_DIR="/usr/local/bin"
 SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
@@ -442,8 +445,9 @@ clone_repo() {
     if [ -d "$INSTALL_DIR/.git" ]; then
         log_info "Updating existing installation..."
         sudo chown -R "$uid:$gid" "$INSTALL_DIR"
+        git -C "$INSTALL_DIR" remote set-url origin "$REPO_URL"
         git -C "$INSTALL_DIR" fetch origin
-        git -C "$INSTALL_DIR" reset --hard origin/master
+        git -C "$INSTALL_DIR" reset --hard "origin/$REPO_BRANCH"
         git -C "$INSTALL_DIR" clean -fd
     else
         log_info "Cloning repository..."
@@ -451,7 +455,7 @@ clone_repo() {
         # clear it so the clone starts clean and ends up owned by the user.
         [ -e "$INSTALL_DIR" ] && sudo rm -rf "$INSTALL_DIR"
         sudo install -d -o "$uid" -g "$gid" "$INSTALL_DIR"
-        git clone "$REPO_URL" "$INSTALL_DIR"
+        git clone --branch "$REPO_BRANCH" "$REPO_URL" "$INSTALL_DIR"
     fi
 
     cd "$INSTALL_DIR"
