@@ -593,10 +593,13 @@ class ScrollPage(Gtk.ScrolledWindow):
         speed = max(1, min(20, (dpi - 400) // 400 + 1))
         config.set("pointer", "speed", speed)
         config.set("pointer", "dpi", dpi, auto_save=True)
-        # In generic mode, skip HID++ DPI - only use gsettings/libinput
-        if not self._is_generic:
+        # Logitech mode: hardware DPI alone controls sensitivity - leave the
+        # OS pointer speed untouched. Generic mode has no HID++, so map the
+        # slider onto gsettings/libinput speed instead.
+        if self._is_generic:
+            self._apply_pointer_speed(dpi)
+        else:
             self._apply_dpi_to_device(dpi)
-        self._apply_pointer_speed(dpi)
 
     def _on_accel_changed(self, combo):
         profile = combo.get_active_id()
