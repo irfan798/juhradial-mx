@@ -531,16 +531,17 @@ class ScrollPage(Gtk.ScrolledWindow):
         # Show/hide sensitivity slider
         self.sensitivity_box.set_visible(mode == "smartshift")
 
-        # Apply to device
+        # Apply to device. SetSmartShift encoding (see daemon manager.rs):
+        # (True, t) = SmartShift - ratchet that auto-releases at threshold t;
+        # (False, 255) = permanent freespin; (False, 0) = permanent ratchet.
         if mode == "ratchet":
             self._apply_smartshift_to_device(False, 0)
         elif mode == "freespin":
-            # Free-spin: wheel_mode=1 (freespin), auto_disengage=0 (no auto-switch)
-            self._apply_smartshift_to_device_raw(1, 0)
+            self._apply_smartshift_to_device(False, 255)
         else:
             # SmartShift
             threshold = int(self.sens_scale.get_value())
-            device_threshold = int((100 - threshold) * 2.55)
+            device_threshold = max(1, min(254, int((100 - threshold) * 2.55)))
             self._apply_smartshift_to_device(True, device_threshold)
 
     def _on_sensitivity_changed(self, scale):
@@ -549,7 +550,7 @@ class ScrollPage(Gtk.ScrolledWindow):
         self._update_sens_label(value)
 
         # Apply to device
-        device_threshold = int((100 - value) * 2.55)
+        device_threshold = max(1, min(254, int((100 - value) * 2.55)))
         self._apply_smartshift_to_device(True, device_threshold)
 
     def _update_sens_label(self, value):
@@ -879,26 +880,6 @@ None,      Down, Button5, {lines}
         except GLib.Error as e:
             logger.error("D-Bus error setting SmartShift: %s", e.message)
 
-    def _apply_smartshift_to_device_raw(self, wheel_mode, auto_disengage):
-        """Set SmartShift with explicit wheel_mode for free-spin support.
-
-        Free-spin = wheel_mode=1, auto_disengage=0 (no auto-switch).
-        Falls back to the simplified API if direct call fails.
-        """
-        proxy = self._get_dbus_proxy()
-        if not proxy:
-            return
-        # Use the simplified API: enabled=True with the given threshold.
-        # wheel_mode=1 + auto_disengage=0 -> freespin on the daemon side.
-        try:
-            proxy.call_sync(
-                "SetSmartShift",
-                GLib.Variant("(by)", (bool(wheel_mode), auto_disengage)),
-                Gio.DBusCallFlags.NONE, 2000, None,
-            )
-        except GLib.Error as e:
-            logger.error("D-Bus error setting wheel mode: %s", e.message)
-
     def _apply_hiresscroll_to_device(self):
         hires = config.get("scroll", "smooth", default=True)
         invert = config.get("scroll", "natural", default=False)
@@ -949,25 +930,29 @@ None,      Down, Button5, {lines}
                     enabled = result.get_child_value(0).get_boolean()
                     device_threshold = result.get_child_value(1).get_byte()
 
-                    # Determine mode from device + saved config
-                    saved_mode = config.get("scroll", "mode", default=None)
-                    if saved_mode == "freespin":
-                        mode = "freespin"
-                    elif enabled:
+                    # GetSmartShift encoding (see daemon manager.rs): enabled
+                    # -> SmartShift with threshold 1-254; disabled -> 255 =
+                    # permanent freespin, 0 = permanent ratchet. The physical
+                    # mode button toggles ratchet/freespin in hardware, so the
+                    # device readback is authoritative over saved config.
+                    if enabled:
                         mode = "smartshift"
+                    elif device_threshold == 255:
+                        mode = "freespin"
                     else:
                         mode = "ratchet"
 
-                    # Convert device threshold to UI percentage
-                    ui_threshold = 100 - int(device_threshold / 2.55)
-                    ui_threshold = max(1, min(100, ui_threshold))
-
                     self.mode_selector.set_mode(mode)
-                    self.sens_scale.set_value(ui_threshold)
                     self.sensitivity_box.set_visible(mode == "smartshift")
-
                     config.set("scroll", "mode", mode)
-                    config.set("scroll", "smartshift_threshold", ui_threshold)
+
+                    if mode == "smartshift":
+                        # Convert device threshold to UI percentage; keep the
+                        # saved threshold untouched in the fixed wheel modes.
+                        ui_threshold = 100 - int(device_threshold / 2.55)
+                        ui_threshold = max(1, min(100, ui_threshold))
+                        self.sens_scale.set_value(ui_threshold)
+                        config.set("scroll", "smartshift_threshold", ui_threshold)
             else:
                 # SmartShift not supported
                 self.mode_selector.set_sensitive(False)
