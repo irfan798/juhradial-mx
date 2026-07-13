@@ -245,7 +245,10 @@ DE_COMMAND_MAP = {
         "lock": ("exec", "loginctl lock-session"),
     },
     "gnome": {
-        "screenshot": ("exec", "gnome-screenshot --interactive"),
+        # GNOME dropped gnome-screenshot from default installs and denies
+        # Shell.Screenshot D-Bus calls from unprivileged apps; a synthetic
+        # PrtScn key press opens the built-in screenshot UI instead.
+        "screenshot": ("exec", "sh -c 'xdotool key Print || gnome-screenshot --interactive'"),
         "files": ("exec", "nautilus"),
         "new_note": ("exec", "gnome-text-editor"),
         "emoji": ("exec", "gnome-characters"),
