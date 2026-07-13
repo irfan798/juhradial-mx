@@ -213,7 +213,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let manager_for_probe = haptic_manager.clone();
         let probe = tokio::task::spawn_blocking(move || {
             let mut manager = manager_for_probe.lock().unwrap();
-            let connect_result = manager.connect();
+            // The first connect can transiently fail right after a daemon
+            // restart (the previous instance's hidraw teardown is still in
+            // flight). A failed probe costs the HID++ divert - and with it
+            // the grab-free evdev path - for the whole session, so retry
+            // briefly before concluding no device is present.
+            let mut connect_result = manager.connect();
+            for _ in 0..2 {
+                if matches!(connect_result, Ok(true)) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(800));
+                connect_result = manager.connect();
+            }
             // Divert immediately while we still hold the lock so we don't race
             // the battery updater on the same hidraw fd.
             let divert_result = if matches!(connect_result, Ok(true)) {
