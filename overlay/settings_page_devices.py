@@ -129,10 +129,10 @@ class DevicesPage(Gtk.ScrolledWindow):
 
             device_card.append(device_image_box)
 
-        # Device name
-        device_name = (
-            get_device_name_from_daemon() if self._is_generic else get_device_name()
-        )
+        # Device name - prefer the daemon's HID++ name (the mouse reports its
+        # real model, e.g. "MX Master 3S"); local PID/libinput detection cannot
+        # see through a Bolt receiver and falls back to a hardcoded name.
+        device_name = get_device_name_from_daemon()
         subtitle = (
             _("Your connected mouse")
             if self._is_generic

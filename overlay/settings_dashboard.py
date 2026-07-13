@@ -667,10 +667,10 @@ class SettingsWindow(SidebarMixin, Adw.ApplicationWindow):
         divider.add_css_class("header-divider")
         title_box.append(divider)
 
-        # Device badge - use daemon name in generic mode
-        badge_name = (
-            get_device_name_from_daemon() if self._is_generic else get_device_name()
-        )
+        # Device badge - prefer the daemon's HID++ name (the mouse reports its
+        # real model, e.g. "MX Master 3S"); local PID/libinput detection cannot
+        # see through a Bolt receiver and falls back to a hardcoded name.
+        badge_name = get_device_name_from_daemon()
         device_badge = Gtk.Label(label=badge_name.upper())
         device_badge.add_css_class("device-badge")
         device_badge.set_valign(Gtk.Align.CENTER)

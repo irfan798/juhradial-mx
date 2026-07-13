@@ -208,11 +208,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // thread pool so the runtime keeps servicing input events during startup.
     let mx4_hidraw_path;
     let mx4_device_name: Option<String>;
+    let hidpp_gesture_divert_ok: bool;
     {
         let manager_for_probe = haptic_manager.clone();
         let probe = tokio::task::spawn_blocking(move || {
             let mut manager = manager_for_probe.lock().unwrap();
-            let connect_result = manager.connect();
+            // The first connect can transiently fail right after a daemon
+            // restart (the previous instance's hidraw teardown is still in
+            // flight). A failed probe costs the HID++ divert - and with it
+            // the grab-free evdev path - for the whole session, so retry
+            // briefly before concluding no device is present.
+            let mut connect_result = manager.connect();
+            for _ in 0..2 {
+                if matches!(connect_result, Ok(true)) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(800));
+                connect_result = manager.connect();
+            }
             // Divert immediately while we still hold the lock so we don't race
             // the battery updater on the same hidraw fd.
             let divert_result = if matches!(connect_result, Ok(true)) {
@@ -226,6 +239,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .await
         .expect("HID++ probe task panicked");
+
+        hidpp_gesture_divert_ok =
+            matches!(probe.0, Ok(true)) && matches!(probe.1, Some(Ok(n)) if n > 0);
 
         match probe.0 {
             Ok(true) => {
@@ -563,12 +579,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // - Generic evdev loop: handles non-Logitech mice (e.g., SteelSeries)
     // Both run simultaneously so either mouse can trigger the radial wheel.
     let evdev_tx = event_tx.clone();
-    // Always suppress gesture button (BTN_BACK = 0x116) on MX evdev path
-    // so it doesn't leak to the OS as "browser back" / "open last file".
+    // Suppress the gesture button on the MX evdev path so it doesn't leak to
+    // the OS as "browser back" / "open last file" - but only when the HID++
+    // divert did not already take the button over. With the divert active the
+    // button never reaches evdev, while a non-empty suppression set forces an
+    // exclusive grab that re-emits all motion through the uinput virtual
+    // mouse, distorting libinput's velocity-based pointer acceleration.
     // Also suppress any macro-bound buttons.
     let mut suppressed_for_mx = macro_evdev_codes.clone();
-    for &code in juhradiald::evdev::GESTURE_BUTTON_CODES {
-        suppressed_for_mx.insert(code);
+    if !hidpp_gesture_divert_ok {
+        for &code in juhradiald::evdev::GESTURE_BUTTON_CODES {
+            suppressed_for_mx.insert(code);
+        }
     }
     let hotplug_for_mx = hotplug_notify.clone();
     let evdev_config = shared_config.clone();

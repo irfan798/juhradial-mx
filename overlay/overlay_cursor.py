@@ -532,18 +532,21 @@ def get_cursor_pos():
         pos = get_cursor_position_hyprland()
         if pos:
             return pos
-    # QCursor.pos() is the most reliable source for Qt coordinate space.
-    # On KDE/GNOME Wayland with HiDPI, XWayland raw coords differ from
-    # Qt logical coords by the devicePixelRatio. QCursor handles this.
-    pos = get_cursor_position_qt()
-    if pos:
-        return pos
-    # QCursor returns (0,0) when no XWayland window is visible.
-    # Fall back to compositor-specific methods.
+    # On GNOME, the cursor-helper extension is the live source. QCursor.pos()
+    # comes from XWayland, which only tracks the pointer while it is over an
+    # XWayland surface and returns a valid-looking stale position otherwise.
     if IS_GNOME:
         pos = get_cursor_position_gnome()
         if pos:
             return pos
+    # QCursor.pos() is the most reliable source for Qt coordinate space on
+    # the remaining compositors. On KDE Wayland with HiDPI, XWayland raw
+    # coords differ from Qt logical coords by the devicePixelRatio. QCursor
+    # handles this. It is also the GNOME fallback when the extension is not
+    # installed.
+    pos = get_cursor_position_qt()
+    if pos:
+        return pos
     if _HAS_XWAYLAND:
         pos = get_cursor_position_xwayland()
         if pos:
