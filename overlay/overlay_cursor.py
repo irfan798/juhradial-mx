@@ -262,6 +262,113 @@ def get_cursor_position_gnome():
     return None
 
 
+def get_gnome_monitors_logical():
+    """Return GNOME logical monitor rects via Mutter's DisplayConfig.
+
+    Each rect is {x, y, width, height, name} where width/height are logical
+    pixels (current mode resolution / scale) and name is the connector (e.g.
+    "eDP-1"). This is the Shell-logical layout the cursor-helper extension
+    reports cursor positions in, so it lets the GNOME path map the cursor onto
+    the matching Qt screen for placement - exactly like get_all_monitors_logical
+    does on Hyprland. Under XWayland a fractionally-scaled monitor sits at a
+    different Qt origin than its Shell-logical origin, so feeding raw logical
+    coords to QWidget.move() misplaces the menu on that monitor (issue: GNOME
+    multi-monitor fractional scaling).
+
+    Returns [] when DisplayConfig is unavailable, so callers fall back to the
+    raw (identity) position - no regression on unscaled/single-monitor setups.
+    """
+    try:
+        import gi
+        gi.require_version("Gio", "2.0")
+        from gi.repository import Gio
+    except (ImportError, ValueError):
+        return []
+    try:
+        proxy = Gio.DBusProxy.new_for_bus_sync(
+            Gio.BusType.SESSION,
+            Gio.DBusProxyFlags.DO_NOT_LOAD_PROPERTIES
+            | Gio.DBusProxyFlags.DO_NOT_CONNECT_SIGNALS,
+            None,
+            "org.gnome.Mutter.DisplayConfig",
+            "/org/gnome/Mutter/DisplayConfig",
+            "org.gnome.Mutter.DisplayConfig",
+            None,
+        )
+        # Reply: (u serial, monitors, logical_monitors, a{sv} properties)
+        state = proxy.call_sync("GetCurrentState", None, 0, 300, None)
+    except Exception:
+        return []  # Mutter unavailable/timeout; caller falls back to raw coords
+
+    try:
+        monitors = state.get_child_value(1)          # a((ssss)a(...modes)a{sv})
+        logical_monitors = state.get_child_value(2)  # a(iiduba(ssss)a{sv})
+
+        # connector -> (width, height) of its current mode
+        current_mode = {}
+        for i in range(monitors.n_children()):
+            m = monitors.get_child_value(i)
+            connector = m.get_child_value(0).get_child_value(0).get_string()
+            modes = m.get_child_value(1)
+            for j in range(modes.n_children()):
+                mode = modes.get_child_value(j)
+                props = mode.get_child_value(6)  # a{sv}
+                is_current = False
+                for k in range(props.n_children()):
+                    entry = props.get_child_value(k)
+                    if entry.get_child_value(0).get_string() == "is-current":
+                        is_current = (
+                            entry.get_child_value(1).get_variant().get_boolean()
+                        )
+                        break
+                if is_current:
+                    current_mode[connector] = (
+                        mode.get_child_value(1).get_int32(),
+                        mode.get_child_value(2).get_int32(),
+                    )
+                    break
+
+        rects = []
+        for i in range(logical_monitors.n_children()):
+            lm = logical_monitors.get_child_value(i)
+            x = lm.get_child_value(0).get_int32()
+            y = lm.get_child_value(1).get_int32()
+            scale = lm.get_child_value(2).get_double()
+            conns = lm.get_child_value(5)  # a(ssss)
+            if conns.n_children() == 0 or scale <= 0:
+                continue
+            connector = conns.get_child_value(0).get_child_value(0).get_string()
+            mode = current_mode.get(connector)
+            if not mode:
+                continue
+            mw, mh = mode
+            rects.append({
+                "x": x,
+                "y": y,
+                "width": int(round(mw / scale)),
+                "height": int(round(mh / scale)),
+                "name": connector,
+            })
+        return rects
+    except Exception:
+        return []  # Unexpected reply shape; degrade to raw coords
+
+
+def get_gnome_monitor_at_cursor(cx, cy, monitors=None):
+    """Return the GNOME logical monitor {x,y,width,height,name} under (cx, cy).
+
+    Coordinates are Shell-logical (from the cursor-helper extension). Returns
+    None when no monitor contains the point or the layout is unavailable, so the
+    caller can fall back to Qt-screen detection.
+    """
+    mons = monitors if monitors is not None else get_gnome_monitors_logical()
+    for m in mons:
+        if (m["x"] <= cx < m["x"] + m["width"]
+                and m["y"] <= cy < m["y"] + m["height"]):
+            return dict(m)
+    return None
+
+
 # =============================================================================
 # XWAYLAND CURSOR DETECTION
 # =============================================================================

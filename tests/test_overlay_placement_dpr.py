@@ -254,6 +254,75 @@ def test_clamp_global_affine_when_names_differ():
     assert ox + 400 <= 2600 and oy + 400 <= 900  # qt desktop bbox is 2600x900
 
 
+# --- GNOME Wayland + XWayland: multi-monitor fractional scaling --------------
+#
+# Measured on GNOME Wayland (host "spectre"): external DP-2 at scale 1.0,
+# Shell-logical origin (0,0); laptop eDP-1 (3000x2000) at scale 1.25,
+# Shell-logical origin (160,1440) -> logical size 2400x1600. XWayland keeps the
+# logical *size* of eDP-1 but places its origin at (320,2880) = origin x dpr, so
+# feeding the raw Shell-logical cursor to QWidget.move() drops the menu into the
+# dead gap between the two Qt screens. The GNOME path must map through the same
+# per-monitor fraction mapping the Hyprland path uses.
+GNOME_LOGICAL = [
+    _geo(0, 0, 2560, 1440, "DP-2"),
+    _geo(160, 1440, 2400, 1600, "eDP-1"),
+]
+GNOME_QT = [
+    _geo(0, 0, 2560, 1440, "DP-2"),
+    _geo(320, 2880, 2400, 1600, "eDP-1"),
+]
+
+
+def _in_rect(px, py, r):
+    return (r["x"] <= px < r["x"] + r["width"]
+            and r["y"] <= py < r["y"] + r["height"])
+
+
+def test_gnome_external_scale1_is_identity():
+    # The scale-1.0 external monitor already worked: mapping is a no-op there.
+    mon = GNOME_LOGICAL[0]
+    for lx, ly in [(0, 0), (1000, 500), (2559, 1439)]:
+        assert hyprland_menu_center(lx, ly, mon, GNOME_LOGICAL, GNOME_QT) == (lx, ly)
+
+
+def test_gnome_laptop_fractional_lands_on_qt_screen():
+    # The bug: a laptop-screen cursor in Shell-logical space is NOT inside the Qt
+    # eDP-1 rect (it falls in the dead gap), so raw move() misplaces it.
+    mon = GNOME_LOGICAL[1]
+    lx, ly = 1000, 2000
+    assert not _in_rect(lx, ly, GNOME_QT[1])  # raw coords are off the Qt screen
+    cx, cy = hyprland_menu_center(lx, ly, mon, GNOME_LOGICAL, GNOME_QT)
+    assert _in_rect(cx, cy, GNOME_QT[1])      # mapped coords land on it
+    # origin-shift by (Qt_origin - logical_origin) = (160, 1440)
+    assert (cx, cy) == (1160, 3440)
+
+
+def test_gnome_laptop_corners_map_into_qt_screen():
+    mon = GNOME_LOGICAL[1]
+    q = GNOME_QT[1]
+    # top-left logical corner -> Qt top-left corner
+    assert hyprland_menu_center(160, 1440, mon, GNOME_LOGICAL, GNOME_QT) == (q["x"], q["y"])
+    # near bottom-right stays inside the Qt screen (no gap overflow)
+    cx, cy = hyprland_menu_center(160 + 2399, 1440 + 1599, mon, GNOME_LOGICAL, GNOME_QT)
+    assert _in_rect(cx, cy, q)
+
+
+def test_gnome_edge_clamp_uses_ring_radius_not_window():
+    # Near a corner the clamp must reserve only the visible ring radius (150),
+    # not the padded window half-size (~242 for shadow + submenu room), so the
+    # menu hugs the cursor instead of jumping inward. Cursor at (10,10) on the
+    # scale-1.0 external monitor.
+    mon = GNOME_LOGICAL[0]
+    ring_r, win = 150, 484
+    p_ring = map_and_clamp_menu(10, 10, mon, GNOME_LOGICAL, GNOME_QT, ring_r * 2)
+    p_win = map_and_clamp_menu(10, 10, mon, GNOME_LOGICAL, GNOME_QT, win)
+    assert p_ring["qt_center"] == (150, 150)   # clamped by the ring radius
+    assert p_win["qt_center"] == (242, 242)    # old behaviour: clamped by window
+    # ring-radius clamp lands strictly closer to the cursor (10,10)
+    assert p_ring["qt_center"][0] < p_win["qt_center"][0]
+    assert p_ring["qt_center"][1] < p_win["qt_center"][1]
+
+
 if __name__ == "__main__":
     import traceback
 

@@ -71,6 +71,8 @@ from overlay_cursor import (
     _refresh_monitors,
     get_monitor_at_cursor,
     get_all_monitors_logical,
+    get_gnome_monitors_logical,
+    get_gnome_monitor_at_cursor,
     get_cursor_position_hyprland,
     get_cursor_position_gnome,
     get_cursor_position_qt,
@@ -625,34 +627,46 @@ class RadialMenu(RadialMenuPaintingMixin, QWidget):
                 _log(f"XWayland cursor position: ({x}, {y})")
 
         # Detect which monitor the cursor is on and clamp menu to it.
-        # Works on all compositors: Hyprland uses IPC monitor info,
-        # all others use Qt screen geometry (accurate in XCB mode).
+        # Works on all compositors: Hyprland uses IPC monitor info, GNOME uses
+        # Mutter's Shell-logical layout (the space the cursor-helper extension
+        # reports cursor positions in), all others use Qt screen geometry
+        # (accurate in XCB mode).
+        gnome_logical_mons = []
         if IS_HYPRLAND:
             mon = get_monitor_at_cursor(x, y)
         else:
             mon = None
-            from PyQt6.QtWidgets import QApplication
-            app = QApplication.instance()
-            if app:
-                for screen in app.screens():
-                    geo = screen.geometry()
-                    if (geo.x() <= x < geo.x() + geo.width() and
-                            geo.y() <= y < geo.y() + geo.height()):
-                        mon = {
-                            "x": geo.x(), "y": geo.y(),
-                            "width": geo.width(), "height": geo.height(),
-                            "name": screen.name(),
-                        }
-                        break
-            if mon is None and app and app.screens():
-                # Cursor outside all screens (e.g. rounding at edges) -
-                # fall back to the primary screen
-                geo = app.primaryScreen().geometry()
-                mon = {
-                    "x": geo.x(), "y": geo.y(),
-                    "width": geo.width(), "height": geo.height(),
-                    "name": app.primaryScreen().name(),
-                }
+            if IS_GNOME:
+                gnome_logical_mons = get_gnome_monitors_logical()
+                mon = get_gnome_monitor_at_cursor(x, y, gnome_logical_mons)
+                if mon is None:
+                    # No Shell-logical monitor under the cursor (Mutter query
+                    # failed or edge rounding): drop to the Qt-screen path and
+                    # skip the logical->Qt mapping so mon stays consistent.
+                    gnome_logical_mons = []
+            if mon is None:
+                from PyQt6.QtWidgets import QApplication
+                app = QApplication.instance()
+                if app:
+                    for screen in app.screens():
+                        geo = screen.geometry()
+                        if (geo.x() <= x < geo.x() + geo.width() and
+                                geo.y() <= y < geo.y() + geo.height()):
+                            mon = {
+                                "x": geo.x(), "y": geo.y(),
+                                "width": geo.width(), "height": geo.height(),
+                                "name": screen.name(),
+                            }
+                            break
+                if mon is None and app and app.screens():
+                    # Cursor outside all screens (e.g. rounding at edges) -
+                    # fall back to the primary screen
+                    geo = app.primaryScreen().geometry()
+                    mon = {
+                        "x": geo.x(), "y": geo.y(),
+                        "width": geo.width(), "height": geo.height(),
+                        "name": app.primaryScreen().name(),
+                    }
 
         if mon:
             print(
@@ -674,7 +688,21 @@ class RadialMenu(RadialMenuPaintingMixin, QWidget):
         # against get_cursor_pos() (also logical). Other compositors: logical
         # space already equals move() space, so clamp directly there.
         half = self.win_px // 2
-        if IS_HYPRLAND and mon:
+        # Hyprland and GNOME report the cursor in compositor/Shell-logical space,
+        # which differs from Qt's move() space under mixed/fractional scaling, so
+        # map the cursor's fraction within its monitor onto the matching Qt screen
+        # and clamp in Qt space (issue #45 on Hyprland; multi-monitor fractional
+        # scaling on GNOME). menu_center_x/y stay logical because the hover poll
+        # compares them against get_cursor_pos() (also logical). Other compositors
+        # already hand back Qt-space coords, so they clamp directly in logical
+        # space. gnome_logical_mons is only non-empty when the cursor's GNOME
+        # monitor was resolved, so mon is guaranteed logical there too.
+        logical_mons = None
+        if IS_HYPRLAND:
+            logical_mons = get_all_monitors_logical()
+        elif IS_GNOME:
+            logical_mons = gnome_logical_mons
+        if logical_mons and mon:
             from PyQt6.QtWidgets import QApplication
             app = QApplication.instance()
             qt_screens = []
@@ -686,14 +714,27 @@ class RadialMenu(RadialMenuPaintingMixin, QWidget):
                         "width": g.width(), "height": g.height(),
                         "name": screen.name(),
                     })
+            # Clamp only by the visible ring radius, not the padded window
+            # half-size (which reserves shadow + submenu room), so the ring hugs
+            # the cursor near screen edges instead of jumping inward by that
+            # padding. The full window is then centred on the clamped ring
+            # center, so its transparent padding is free to spill off-screen.
+            # GNOME uses the ring radius; Hyprland keeps its window-size clamp
+            # (tested for issue #45, and untestable here).
+            clamp_size = (
+                max(1, int(round(MENU_RADIUS * self.ring_scale))) * 2
+                if IS_GNOME else self.win_px
+            )
             placement = map_and_clamp_menu(
-                x, y, mon, get_all_monitors_logical(), qt_screens, self.win_px
+                x, y, mon, logical_mons, qt_screens, clamp_size
             )
             self.menu_center_x, self.menu_center_y = placement["logical_center"]
-            move_x, move_y = placement["qt_origin"]
+            qt_center_x, qt_center_y = placement["qt_center"]
+            move_x, move_y = qt_center_x - half, qt_center_y - half
             _log(
-                f"Hyprland placement: logical ({x},{y}) -> Qt {placement['qt_center']} "
-                f"origin {placement['qt_origin']} logical_center {placement['logical_center']}; "
+                f"Mapped placement: logical ({x},{y}) -> Qt center "
+                f"({qt_center_x},{qt_center_y}) origin ({move_x},{move_y}) "
+                f"logical_center {placement['logical_center']} clamp_size={clamp_size}; "
                 f"qt_screens={[(s['name'], s['width'], s['height']) for s in qt_screens]}"
             )
         else:
