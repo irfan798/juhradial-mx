@@ -378,7 +378,15 @@ windowrulev2 = noanim, title:^(JuhRadial MX)$
 
 ## Uninstall
 
-To remove JuhRadial MX, stop the user services first, then delete the installed
+From a clone of this repo, [`uninstall.sh`](uninstall.sh) reverses everything
+below in a single step — it keeps your configuration unless you pass `--purge`:
+
+```bash
+./uninstall.sh            # remove the app, keep ~/.config/juhradial
+./uninstall.sh --purge    # also delete your themes, button maps and macros
+```
+
+To remove it by hand instead, stop the user services first, then delete the installed
 files. The daemon and overlay run as your user, so steps 1, 2 and 5 need no root;
 the system files under `/usr/local`, `/usr/share` and `/etc` (steps 3 and 4) do.
 
