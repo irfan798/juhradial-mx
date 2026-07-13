@@ -737,6 +737,42 @@ configure_desktop() {
     fi
 }
 
+# ── Overlay autostart ────────────────────────────────────────────────
+# The tray/overlay app (the radial-menu UI) is not a systemd service; it has to
+# start with the graphical session. The Settings app also manages this entry via
+# the "Start at login" toggle, but only once Settings has been opened, so seed it
+# at install time so the menu works on first login with no manual step. Writes
+# the same file the Settings toggle owns (~/.config/autostart/juhradial-mx.desktop)
+# so the two stay in sync, and never clobbers an existing entry or an explicit
+# opt-out.
+install_autostart() {
+    local autostart_dir autostart_file
+    autostart_dir="${XDG_CONFIG_HOME:-$HOME/.config}/autostart"
+    autostart_file="$autostart_dir/juhradial-mx.desktop"
+
+    # Respect an explicit opt-out from Settings > Start at login.
+    if [ -f "$CONFIG_DIR/config.json" ] && \
+       grep -q '"start_at_login"[[:space:]]*:[[:space:]]*false' "$CONFIG_DIR/config.json"; then
+        return 0
+    fi
+    # Don't clobber an entry the user (or a prior install) already set up.
+    [ -f "$autostart_file" ] && return 0
+
+    mkdir -p "$autostart_dir"
+    cat > "$autostart_file" <<EOF
+[Desktop Entry]
+Type=Application
+Name=JuhRadial MX
+Comment=Radial menu for Logitech MX Master
+Exec=$BIN_DIR/juhradial-mx
+Icon=juhradial-mx
+Terminal=false
+Categories=Utility;
+X-GNOME-Autostart-enabled=true
+EOF
+    log_success "Autostart entry (menu starts at login)"
+}
+
 # ── Completion ───────────────────────────────────────────────────────
 print_success() {
     # Read new version from the freshly fetched source
@@ -822,6 +858,7 @@ main() {
     build_project
     install_files
     configure_desktop
+    install_autostart
     enable_service
     print_success
 }
