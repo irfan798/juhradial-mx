@@ -560,22 +560,25 @@ class RadialMenu(RadialMenuPaintingMixin, QWidget):
                 x, y = fresh_pos
                 print(f"OVERLAY: Hyprland fresh cursor position: ({x}, {y})")
 
-        # On GNOME Wayland, use QCursor.pos() for positioning because the
-        # GNOME extension returns Clutter logical coords which differ from
-        # XWayland coords on HiDPI monitors (e.g., 4K at 200% scaling).
-        # QCursor.pos() is in Qt/XWayland space, matching self.move().
-        # Fall back to GNOME extension if QCursor returns (0,0) - which
-        # happens when no XWayland window is currently visible.
+        # On GNOME Wayland, prefer the cursor-helper extension: it reads the
+        # live pointer position from the compositor. QCursor.pos() comes from
+        # XWayland, which only tracks the pointer while it is over an XWayland
+        # surface - after the first menu show it keeps returning that stale
+        # position and the menu reopens at the old spot (same failure mode as
+        # the KDE Wayland path below). Extension coords are Shell-logical and
+        # can differ from XWayland space on scaled monitors, but a stale
+        # position is wrong on every setup; QCursor stays as the fallback for
+        # when the extension is not installed.
         if IS_GNOME:
-            fresh_pos = get_cursor_position_qt()
+            fresh_pos = get_cursor_position_gnome()
             if fresh_pos:
                 x, y = fresh_pos
-                print(f"OVERLAY: GNOME QCursor position: ({x}, {y})")
+                print(f"OVERLAY: GNOME extension position: ({x}, {y})")
             else:
-                fresh_pos = get_cursor_position_gnome()
+                fresh_pos = get_cursor_position_qt()
                 if fresh_pos:
                     x, y = fresh_pos
-                    print(f"OVERLAY: GNOME extension fallback: ({x}, {y})")
+                    print(f"OVERLAY: GNOME QCursor fallback: ({x}, {y})")
 
         # On KDE X11, use QCursor.pos() - it's in Qt's own coordinate space.
         if IS_KDE and IS_X11:
