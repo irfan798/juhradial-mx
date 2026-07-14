@@ -183,6 +183,7 @@ class FlowPresenceServer:
         peer_name = None
         aes_key = None
         nid_hex = None
+        hb_stop = None
 
         try:
             conn.settimeout(RECV_TIMEOUT)
@@ -245,6 +246,27 @@ class FlowPresenceServer:
 
             logger.info("Presence channel established with %s (%s)", peer_name, addr[0])
 
+            # The client only ever sends (heartbeats) and never receives, so its
+            # receive loop hits RECV_TIMEOUT after ~15s of server silence and
+            # tears the whole connection down, cycling forever. Send heartbeats
+            # back so both directions stay alive.
+            hb_stop = threading.Event()
+
+            def _server_heartbeat(sock=conn, key=aes_key, stop=hb_stop):
+                from .crypto import build_encrypted_packet
+                while not stop.is_set() and self.running:
+                    try:
+                        payload = json.dumps(
+                            {"type": MSG_HEARTBEAT, "ts": time.time()}
+                        ).encode("utf-8")
+                        _send_framed(sock, build_encrypted_packet(
+                            self.node_id, key, payload))
+                    except Exception:
+                        break
+                    stop.wait(HEARTBEAT_INTERVAL)
+
+            threading.Thread(target=_server_heartbeat, daemon=True).start()
+
             # Deliver the first message
             if first_message and self.on_message:
                 self.on_message(peer_name, first_message)
@@ -277,6 +299,8 @@ class FlowPresenceServer:
             if self.running:
                 logger.debug("Connection error from %s: %s", addr[0], e)
         finally:
+            if hb_stop:
+                hb_stop.set()
             if nid_hex:
                 with self._conn_lock:
                     self.active_connections.pop(nid_hex, None)
