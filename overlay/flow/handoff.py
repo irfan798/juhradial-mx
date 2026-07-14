@@ -227,6 +227,11 @@ class FlowHandoffManager:
             if sent:
                 logger.info("Cursor handoff to %s via %s edge (rel: %.2f)",
                             peer_name, edge, relative_pos)
+                # Switch the MX Master to the peer's Easy-Switch channel so the
+                # physical mouse follows the cursor - parity with the bridge path,
+                # which already does this for Mac/Win peers (needs
+                # remote_host_index in flow config; skips with a log otherwise).
+                self._switch_host_for_bridge()
 
         # Also send to JuhFlow bridge peers (Mac/Win companion apps)
         # Only on the configured flow direction edge
