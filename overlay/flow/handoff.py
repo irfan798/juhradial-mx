@@ -158,6 +158,20 @@ class FlowHandoffManager:
         client.start()
         logger.info("Connecting presence client to %s (%s:%d)", peer_name, peer_ip, peer_port)
 
+        # Map this peer to the configured flow edge. Without it on_edge_hit finds
+        # no peer for the edge ("No peer configured for right edge") and nothing
+        # crosses even though the edge fires. All peers share the single flow
+        # direction (one edge crosses to the peer), so use flow.direction.
+        edge = "right"
+        try:
+            import json as _json, os as _os
+            _cfg = _json.load(open(_os.path.expanduser(
+                "~/.config/juhradial/config.json")))
+            edge = _cfg.get("flow", {}).get("direction", "right")
+        except Exception:
+            pass
+        self.set_peer_edge(peer_name, edge)
+
     def set_peer_edge(self, peer_name: str, edge: str):
         """Set which screen edge a peer is mapped to."""
         self.peer_edges[peer_name] = edge
