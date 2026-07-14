@@ -173,9 +173,15 @@ class ScreenEdgeDetector:
 
         # Get cursor position and screen geometry
         try:
-            from overlay.overlay_cursor import get_cursor_pos, get_screen_geometry
+            from overlay.overlay_cursor import (
+                get_cursor_pos, get_screen_geometry,
+                IS_GNOME, get_gnome_monitor_at_cursor,
+            )
         except ImportError:
-            from overlay_cursor import get_cursor_pos, get_screen_geometry
+            from overlay_cursor import (
+                get_cursor_pos, get_screen_geometry,
+                IS_GNOME, get_gnome_monitor_at_cursor,
+            )
         pos = get_cursor_pos()
         if not pos:
             self._reset_dwell()
@@ -195,8 +201,15 @@ class ScreenEdgeDetector:
         self._prev_pos = (cx, cy)
         self._prev_time = now
 
-        # Pass cursor pos to avoid redundant gdbus call inside get_screen_geometry
-        screen = get_screen_geometry(cursor_pos=pos)
+        # Screen geometry must share the cursor's coordinate space. On GNOME the
+        # cursor comes from the Shell extension in Shell-logical pixels, which
+        # differ from Qt's per-monitor geometry under fractional scaling; use the
+        # matching Shell-logical monitor from Mutter (native, and it lines up with
+        # the cursor) so the edge maths work. Otherwise the edge is never detected
+        # on a scaled screen. Falls back to Qt geometry off GNOME / on query fail.
+        screen = get_gnome_monitor_at_cursor(cx, cy) if IS_GNOME else None
+        if screen is None:
+            screen = get_screen_geometry(cursor_pos=pos)
 
         sx = screen["x"]
         sy = screen["y"]
@@ -206,12 +219,20 @@ class ScreenEdgeDetector:
         # Filter by configured monitor: only trigger on the monitor where
         # the indicator is placed, not on every monitor's edge.
         # Uses cached geometry (set from main thread) to avoid Qt from bg thread.
-        if self._flow_monitor and self._flow_monitor_geom:
-            g = self._flow_monitor_geom
-            if not (g["x"] == sx and g["y"] == sy
-                    and g["width"] == sw and g["height"] == sh):
-                self._reset_dwell()
-                return
+        if self._flow_monitor:
+            screen_name = screen.get("name")
+            if screen_name is not None:
+                # GNOME (Shell-logical) path: match by connector name.
+                if screen_name != self._flow_monitor:
+                    self._reset_dwell()
+                    return
+            elif self._flow_monitor_geom:
+                # Qt path: compare cached geometry.
+                g = self._flow_monitor_geom
+                if not (g["x"] == sx and g["y"] == sy
+                        and g["width"] == sw and g["height"] == sh):
+                    self._reset_dwell()
+                    return
 
         # Only check the configured flow direction edge, not all four edges.
         edge = None
