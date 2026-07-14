@@ -247,8 +247,13 @@ class FlowPage(FlowDiscoveryMixin, Gtk.ScrolledWindow):
         self.computers_box.append(self.no_computers_label)
         area.append(self.computers_box)
 
-        scan_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        scan_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         scan_box.set_halign(Gtk.Align.END)
+        # Show this computer's pairing code so the other machine can enter it.
+        self.code_button = Gtk.Button(label=_("Pairing Code"))
+        self.code_button.add_css_class("secondary-btn")
+        self.code_button.connect("clicked", self._on_show_code_clicked)
+        scan_box.append(self.code_button)
         self.scan_button = Gtk.Button(label=_("Scan Network"))
         self.scan_button.add_css_class("secondary-btn")
         self.scan_button.connect("clicked", self._on_scan_clicked)

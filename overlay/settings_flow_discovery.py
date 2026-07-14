@@ -495,12 +495,9 @@ class FlowDiscoveryMixin:
             logger.warning("Flow module not available")
             return
 
-        # Get the Flow server and generate a pairing code
-        server = get_flow_server()
-        if not server:
-            logger.warning("Flow server not running - enable Flow first")
-            return
-
+        # The Flow server runs in the overlay process, not here; pairing is
+        # driven over localhost (see _complete_pairing / _flow_local_post), so
+        # just open the dialog. Flow-down is surfaced as an error there.
         computer_name = computer.get("name", "Unknown")
         computer_ip = computer.get("ip", "")
         computer_port = computer.get("port", FLOW_PORT)
@@ -573,12 +570,11 @@ class FlowDiscoveryMixin:
                 public_key=client.peer_public_key or ""
             )
 
-            # Notify discovery about new peer key for encrypted beacons
-            if client.peer_aes_key:
-                from flow import get_logi_discovery
-                discovery = get_logi_discovery()
-                if discovery:
-                    discovery.add_peer_key(computer_name, client.peer_aes_key)
+            # The Flow server + discovery run in the overlay process, not here.
+            # FlowClient.pair already wrote the peer key to disk; ask the overlay
+            # (over localhost) to wire it into the live discovery/presence/handoff
+            # so it works without restarting the overlay.
+            self._flow_local_post("/local/peer_linked", {"name": computer_name})
 
             logger.info(
                 "Successfully linked with %s (crypto: %s)",
@@ -593,3 +589,56 @@ class FlowDiscoveryMixin:
                 window.toast_overlay.add_toast(toast)
         else:
             logger.error("Failed to link with %s", computer_name)
+            self._flow_message(
+                _("Link failed"),
+                _("Could not pair with {name}. Check the pairing code and that "
+                  "Flow is running on both computers.").format(name=computer_name),
+            )
+
+    def _flow_local_post(self, path, payload):
+        """POST to the local overlay's Flow HTTP server (loopback only).
+
+        Pairing state (server, discovery, presence) lives in the overlay
+        process; the settings app reaches it over 127.0.0.1. Returns the parsed
+        JSON dict, or None on any failure (e.g. Flow not running).
+        """
+        import json as _json
+        import urllib.request as _urlreq
+        url = f"http://127.0.0.1:{FLOW_PORT}{path}"
+        data = _json.dumps(payload).encode("utf-8")
+        try:
+            req = _urlreq.Request(
+                url, data=data,
+                headers={"Content-Type": "application/json"}, method="POST",
+            )
+            with _urlreq.urlopen(req, timeout=8) as resp:
+                return _json.loads(resp.read().decode("utf-8"))
+        except Exception as e:
+            logger.warning("Local Flow POST %s failed: %s", path, e)
+            return None
+
+    def _on_show_code_clicked(self, button):
+        """Ask the overlay's Flow server for a pairing code and display it."""
+        resp = self._flow_local_post("/local/gen_code", {})
+        if not resp or "code" not in resp:
+            self._flow_message(
+                _("Flow is not running"),
+                _("Open JuhRadial MX (the tray app) so Flow can start, then try "
+                  "again."),
+            )
+            return
+        self._flow_message(
+            _("Your pairing code"),
+            _("Enter this code on the other computer to link them:\n\n"
+              "        {code}\n\n"
+              "It stays valid until it is used once.").format(code=resp["code"]),
+        )
+
+    def _flow_message(self, heading, body):
+        """Show a simple modal message dialog on the settings window."""
+        dialog = Adw.MessageDialog(
+            transient_for=self.get_root(), modal=True,
+            heading=heading, body=body,
+        )
+        dialog.add_response("ok", _("Done"))
+        dialog.present()

@@ -140,6 +140,53 @@ class FlowRequestHandler(BaseHTTPRequestHandler):
                 self._send_error(400, 'Invalid JSON')
             return
 
+        # ── Local IPC endpoints (localhost only) ─────────────────────────
+        # The pairing UI runs in the settings process while the Flow server and
+        # discovery/presence run in the overlay process. These endpoints let the
+        # settings app drive pairing in the correct (overlay) process. Restricted
+        # to loopback so nothing on the network can reach them.
+        if self.path in ('/local/gen_code', '/local/peer_linked'):
+            if self.client_address[0] not in ('127.0.0.1', '::1'):
+                self._send_error(403, 'Forbidden')
+                return
+
+            if self.path == '/local/gen_code':
+                code = self.server.generate_pairing_code()
+                logger.info("Generated pairing code for local UI")
+                self._send_json({'code': code})
+                return
+
+            # /local/peer_linked: the settings app has already paired (the peer
+            # key was written to disk by FlowClient.pair); load it and wire it
+            # into the live discovery, presence and handoff so it works without
+            # restarting the overlay.
+            try:
+                name = json.loads(body).get('name', '') if body else ''
+            except json.JSONDecodeError:
+                self._send_error(400, 'Invalid JSON')
+                return
+            from .keys import load_peer_key, get_node_id
+            peer = load_peer_key(name)
+            if not peer:
+                self._send_error(404, 'Peer not found')
+                return
+            aes_key = peer['aes_key_bytes']
+            if self.server.on_peer_key_callback:
+                self.server.on_peer_key_callback(name, aes_key)
+            try:
+                from . import get_handoff_manager
+                hm = get_handoff_manager()
+                if hm:
+                    hm.connect_to_peer(
+                        name, peer['ip'], peer.get('port', FLOW_PORT),
+                        get_node_id(), aes_key,
+                    )
+            except Exception as e:
+                logger.warning("connect_to_peer failed for %s: %s", _sanitize_log(name), e)
+            logger.info("Linked peer %s wired into live Flow session", _sanitize_log(name))
+            self._send_json({'status': 'ok'})
+            return
+
         client_name = self._verify_auth()
         if not client_name:
             self._send_error(401, 'Unauthorized')
